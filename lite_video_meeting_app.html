@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LiteMeet - High-Performance Low-Bandwidth Video Meetings</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            }
+          },
+          animation: {
+            'pulse-subtle': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Custom scrollbar for chat and clean UI styling */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(51, 65, 85, 0.8);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(71, 85, 105, 1);
+    }
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .video-grid-1 { grid-template-columns: 1fr; }
+    .video-grid-2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+    .video-grid-3, .video-grid-4 { grid-template-columns: repeat(2, 1fr); }
+    @media (max-width: 640px) {
+      .video-grid-3, .video-grid-4 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body class="h-full text-slate-100 flex flex-col font-sans overflow-hidden antialiased">
+
+  <!-- Top Navigation Bar -->
+  <header class="h-14 glass-panel border-b border-slate-800 px-4 flex items-center justify-between z-20 shrink-0">
+    <div class="flex items-center space-x-3">
+      <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/20">
+        <i class="fa-solid font-bold fa-bolt text-sm"></i>
+      </div>
+      <div>
+        <div class="flex items-center space-x-2">
+          <h1 class="font-semibold text-sm sm:text-base tracking-wide text-white">LiteMeet</h1>
+          <span class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">Ultra-Low BW</span>
+        </div>
+        <p class="text-[11px] text-slate-400 hidden sm:block">Room ID: <span id="room-id-display" class="font-mono text-slate-300">room-lite-902</span></p>
+      </div>
+    </div>
+
+    <!-- Network Health Indicator -->
+    <div class="flex items-center space-x-2 sm:space-x-4">
+      <div id="network-status-badge" class="flex items-center space-x-2 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 transition-all duration-300">
+        <span class="relative flex h-2 w-2">
+          <span id="network-ping-pulse" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+          <span id="network-dot" class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+        </span>
+        <span id="network-status-text" class="hidden sm:inline">Network: Excellent</span>
+        <span id="network-metrics" class="text-[10px] font-mono opacity-80 border-l border-emerald-500/30 pl-2">120 kbps | 0% loss</span>
+      </div>
+
+      <!-- Quick Action Pill -->
+      <button onclick="copyRoomLink()" class="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 transition flex items-center space-x-1.5">
+        <i class="fa-solid fa-link text-slate-400"></i>
+        <span class="hidden md:inline">Invite Link</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="flex-1 flex overflow-hidden relative">
+
+    <!-- Primary Video Canvas Stage -->
+    <main class="flex-1 p-3 sm:p-4 flex flex-col justify-between overflow-y-auto relative bg-slate-950">
+      
+      <!-- Video Tiles Container Grid -->
+      <div id="video-grid" class="grid video-grid-2 gap-3 sm:gap-4 w-full h-full max-w-6xl mx-auto items-center my-auto transition-all duration-300">
+
+        <!-- Local Participant Card -->
+        <div id="card-local" class="relative bg-slate-900/90 rounded-2xl overflow-hidden border border-slate-800 aspect-video shadow-xl flex items-center justify-center group">
+          <!-- Video Element -->
+          <video id="local-video" autoplay playsinline muted class="w-full h-full object-cover"></video>
+          
+          <!-- Avatar Fallback (when video toggled off) -->
+          <div id="local-avatar" class="hidden flex-col items-center justify-center text-center">
+            <div class="w-20 h-20 rounded-full bg-indigo-600/30 border-2 border-indigo-500 flex items-center justify-center text-indigo-300 text-2xl font-bold mb-2 shadow-inner">
+              You
+            </div>
+            <p class="text-xs text-slate-400 font-medium">Camera Disabled</p>
+          </div>
+
+          <!-- Bottom Meta Bar -->
+          <div class="absolute bottom-3 left-3 right-3 flex items-center justify-between pointer-events-none">
+            <div class="flex items-center space-x-2 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded-lg border border-slate-800 text-xs">
+              <span id="local-audio-indicator" class="w-2 h-2 rounded-full bg-slate-500 transition-colors"></span>
+              <span class="font-medium text-slate-200">You (Host)</span>
+            </div>
+            <div id="local-bw-tag" class="text-[10px] bg-slate-950/80 backdrop-blur-md px-2 py-1 rounded border border-slate-800 text-slate-400 font-mono">
+              Cap: 120kbps
+            </div>
+          </div>
+
+          <!-- Audio Level Meter Bar -->
+          <div class="absolute top-0 left-0 right-0 h-1 bg-slate-800 overflow-hidden">
+            <div id="local-audio-bar" class="h-full bg-emerald-500 w-0 transition-all duration-75"></div>
+          </div>
+        </div>
+
+        <!-- Simulated Remote Participant 1 Card -->
+        <div id="card-remote-1" class="relative bg-slate-900/90 rounded-2xl overflow-hidden border border-slate-800 aspect-video shadow-xl flex items-center justify-center group">
+          <!-- Remote Video Element -->
+          <canvas id="remote-canvas-1" class="w-full h-full object-cover"></canvas>
+          
+          <!-- Low-Bandwidth / Audio-Only Fallback Screen -->
+          <div id="remote-avatar-1" class="hidden flex-col items-center justify-center text-center p-4">
+            <div class="w-20 h-20 rounded-full bg-emerald-600/20 border-2 border-emerald-500/40 flex items-center justify-center text-emerald-400 text-2xl font-bold mb-2 animate-pulse-subtle">
+              JD
+            </div>
+            <p class="text-xs text-slate-300 font-semibold">John Doe</p>
+            <p class="text-[11px] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded mt-1 border border-amber-500/20">
+              <i class="fa-solid fa-signal-warning mr-1"></i>Low Network Mode (Audio Only)
+            </p>
+          </div>
+
+          <!-- Screen Share Overlay Tag -->
+          <div id="remote-screenshare-tag-1" class="hidden absolute top-3 left-3 bg-indigo-600/90 backdrop-blur-md text-white text-[10px] px-2.5 py-1 rounded-md font-semibold tracking-wide flex items-center space-x-1.5 shadow-md">
+            <i class="fa-solid fa-desktop animate-pulse"></i>
+            <span>Screen Share Stream</span>
+          </div>
+
+          <!-- Participant Controls overlay (hover) -->
+          <div class="absolute bottom-3 left-3 right-3 flex items-center justify-between">
+            <div class="flex items-center space-x-2 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded-lg border border-slate-800 text-xs">
+              <span id="remote-1-audio-indicator" class="w-2 h-2 rounded-full bg-emerald-500"></span>
+              <span class="font-medium text-slate-200">John Doe</span>
+            </div>
+            <div class="text-[10px] bg-slate-950/80 backdrop-blur-md px-2 py-1 rounded border border-slate-800 text-emerald-400 font-mono">
+              Inbound: 98kbps
+            </div>
+          </div>
+
+          <!-- Audio Level Indicator Bar -->
+          <div class="absolute top-0 left-0 right-0 h-1 bg-slate-800 overflow-hidden">
+            <div id="remote-1-audio-bar" class="h-full bg-emerald-500 w-0 transition-all duration-75"></div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Test Control Panel (Simulation Controls) -->
+      <div class="mt-4 max-w-3xl mx-auto w-full glass-panel rounded-xl p-3 border border-slate-800 text-xs">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-semibold text-slate-300 flex items-center gap-1.5">
+            <i class="fa-solid fa-flask text-indigo-400"></i> Network & Peer Simulation Controls
+          </span>
+          <span class="text-[10px] text-slate-500">Interactive Testing Sandbox</span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <button onclick="toggleSimulatedNetworkDegradation()" id="btn-sim-network" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 font-medium transition text-left flex items-center justify-between">
+            <span>Simulate Packet Loss</span>
+            <i class="fa-solid fa-wifi text-slate-500"></i>
+          </button>
+          <button onclick="toggleRemoteParticipant()" id="btn-toggle-peer" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 font-medium transition text-left flex items-center justify-between">
+            <span>Toggle Peer 2</span>
+            <i class="fa-solid fa-user-plus text-slate-500"></i>
+          </button>
+          <button onclick="triggerLowBandwidthAutoMute()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 font-medium transition text-left flex items-center justify-between">
+            <span>Force Low-BW Mode</span>
+            <i class="fa-solid fa-gauge-low text-slate-500"></i>
+          </button>
+          <button onclick="resetNetworkStats()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 font-medium transition text-left flex items-center justify-between">
+            <span>Reset Quality</span>
+            <i class="fa-solid fa-rotate-left text-slate-500"></i>
+          </button>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Right In-Meeting Chat Panel -->
+    <aside id="chat-drawer" class="w-80 glass-panel border-l border-slate-800 flex flex-col transition-all duration-300 absolute right-0 top-0 bottom-0 z-30 transform translate-x-full lg:relative lg:translate-x-0">
+      
+      <!-- Drawer Header -->
+      <div class="p-3 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <i class="fa-solid fa-comments text-indigo-400"></i>
+          <h2 class="font-semibold text-sm">In-Meeting Chat</h2>
+        </div>
+        <button onclick="toggleChatDrawer()" class="lg:hidden text-slate-400 hover:text-white p-1">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <!-- Chat Messages Container -->
+      <div id="chat-messages" class="flex-1 p-3 overflow-y-auto space-y-3 text-xs">
+        <!-- System Welcome Message -->
+        <div class="p-2.5 rounded-lg bg-indigo-950/40 border border-indigo-800/40 text-indigo-300">
+          <p class="font-semibold text-[11px] mb-0.5"><i class="fa-solid fa-circle-info mr-1"></i>LiteMeet Engine</p>
+          <p class="text-[11px] opacity-90">Room ready. Bandwidth is capped at 120kbps for maximum battery & stream performance.</p>
+        </div>
+
+        <div class="flex flex-col space-y-1">
+          <div class="flex items-center justify-between text-[10px] text-slate-400">
+            <span class="font-semibold text-slate-300">John Doe</span>
+            <span>10:42 AM</span>
+          </div>
+          <div class="p-2 rounded-lg bg-slate-800/80 text-slate-200 border border-slate-700/50">
+            Hey everyone! Audio quality sounds super crisp even on 3G network.
+          </div>
+        </div>
+      </div>
+
+      <!-- Chat Input Area -->
+      <div class="p-3 border-t border-slate-800 bg-slate-900/60">
+        <form id="chat-form" onsubmit="handleSendChat(event)" class="flex space-x-2">
+          <input 
+            type="text" 
+            id="chat-input" 
+            placeholder="Type a message..." 
+            class="flex-1 bg-slate-950 border border-slate-700/80 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition"
+          />
+          <button 
+            type="submit" 
+            class="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium transition flex items-center justify-center shrink-0"
+          >
+            <i class="fa-solid fa-paper-plane"></i>
+          </button>
+        </form>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Bottom Action Toolbar -->
+  <footer class="h-16 glass-panel border-t border-slate-800 px-4 flex items-center justify-between z-20 shrink-0">
+    
+    <!-- Left Meeting Info -->
+    <div class="hidden md:flex items-center space-x-3 text-xs text-slate-400">
+      <span class="flex items-center text-slate-300 font-medium">
+        <i class="fa-solid fa-users text-indigo-400 mr-2"></i>
+        <span id="participant-count">2</span> Participants
+      </span>
+    </div>
+
+    <!-- Center Primary Controls -->
+    <div class="flex items-center justify-center space-x-2 sm:space-x-4 mx-auto md:mx-0">
+      <!-- Mic Toggle -->
+      <button 
+        id="btn-mic" 
+        onclick="toggleMicrophone()" 
+        class="w-11 h-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center justify-center transition shadow-md group relative"
+        title="Toggle Microphone"
+      >
+        <i id="icon-mic" class="fa-solid fa-microphone text-base"></i>
+        <span class="absolute -top-8 bg-slate-900 text-slate-300 text-[10px] px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition duration-150 pointer-events-none whitespace-nowrap">Mute Mic</span>
+      </button>
+
+      <!-- Camera Toggle -->
+      <button 
+        id="btn-cam" 
+        onclick="toggleCamera()" 
+        class="w-11 h-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center justify-center transition shadow-md group relative"
+        title="Toggle Camera"
+      >
+        <i id="icon-cam" class="fa-solid fa-video text-base"></i>
+        <span class="absolute -top-8 bg-slate-900 text-slate-300 text-[10px] px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition duration-150 pointer-events-none whitespace-nowrap">Stop Video</span>
+      </button>
+
+      <!-- Screen Share Button -->
+      <button 
+        id="btn-screenshare" 
+        onclick="toggleScreenShare()" 
+        class="w-11 h-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center justify-center transition shadow-md group relative"
+        title="Share Screen"
+      >
+        <i id="icon-screenshare" class="fa-solid fa-desktop text-base"></i>
+        <span class="absolute -top-8 bg-slate-900 text-slate-300 text-[10px] px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition duration-150 pointer-events-none whitespace-nowrap">Share Screen</span>
+      </button>
+
+      <!-- Low-Bandwidth Mode Quick Switch -->
+      <button 
+        id="btn-low-bw" 
+        onclick="toggleLowBandwidthMode()" 
+        class="w-11 h-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center justify-center transition shadow-md group relative"
+        title="Toggle Low Bandwidth Mode"
+      >
+        <i id="icon-low-bw" class="fa-solid fa-bolt text-base"></i>
+        <span class="absolute -top-8 bg-slate-900 text-slate-300 text-[10px] px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition duration-150 pointer-events-none whitespace-nowrap">Lite Mode</span>
+      </button>
+
+      <!-- Leave Call Button -->
+      <button 
+        onclick="leaveMeeting()" 
+        class="px-4 h-11 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs flex items-center space-x-2 transition shadow-lg shadow-rose-600/20 ml-2"
+      >
+        <i class="fa-solid fa-phone-slash"></i>
+        <span class="hidden sm:inline">Leave</span>
+      </button>
+    </div>
+
+    <!-- Right Utility Buttons -->
+    <div class="hidden md:flex items-center space-x-2">
+      <button 
+        onclick="toggleChatDrawer()" 
+        class="relative w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center justify-center transition"
+        title="Toggle Chat"
+      >
+        <i class="fa-solid fa-message text-sm"></i>
+        <span id="chat-badge" class="hidden absolute -top-1 -right-1 w-4 h-4 bg-indigo-500 text-white text-[9px] font-bold rounded-full items-center justify-center">1</span>
+      </button>
+    </div>
+
+  </footer>
+
+  <div id="toast-container" class="fixed top-16 right-4 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+  <script>
+    /* ========================================================================
+     * LiteMeet Application Engine
+     * WebRTC Media Stream Management, Screen Sharing, & Low-Bandwidth Adaptation
+     * ======================================================================== */
+
+    // App State
+    const state = {
+      isMicMuted: false,
+      isVideoStopped: false,
+      isScreenSharing: false,
+      isLowBandwidthMode: false,
+      isSimulatingLoss: false,
+      hasPeer2: false,
+      unreadChatCount: 0,
+      packetsLostRate: 0.02,
+      bitrateKbps: 118,
+      rttMs: 32,
+      localStream: null,
+      screenStream: null,
+      audioAnalyser: null,
+      animationFrameId: null
+    };
+
+    // DOM References
+    const localVideo = document.getElementById('local-video');
+    const localAvatar = document.getElementById('local-avatar');
+    const localAudioBar = document.getElementById('local-audio-bar');
+    const localAudioIndicator = document.getElementById('local-audio-indicator');
+    
+    const remoteCanvas1 = document.getElementById('remote-canvas-1');
+    const remoteAvatar1 = document.getElementById('remote-avatar-1');
+    const remoteScreenshareTag1 = document.getElementById('remote-screenshare-tag-1');
+    const remote1AudioBar = document.getElementById('remote-1-audio-bar');
+
+    const networkStatusBadge = document.getElementById('network-status-badge');
+    const networkStatusText = document.getElementById('network-status-text');
+    const networkMetrics = document.getElementById('network-metrics');
+    const networkDot = document.getElementById('network-dot');
+
+    // Initialize Application
+    window.addEventListener('DOMContentLoaded', () => {
+      initLocalMedia();
+      startRemotePeerSimulation();
+      startNetworkMonitoringLoop();
+    });
+
+    async function initLocalMedia() {
+      // Ultra-Low Bandwidth Default Constraints (QVGA 240p @ 15fps)
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
+        video: {
+          width: { max: 320, ideal: 240 },
+          height: { max: 240, ideal: 180 },
+          frameRate: { max: 15, ideal: 12 }
+        }
+      };
+
+      try {
+        state.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        localVideo.srcObject = state.localStream;
+        setupAudioAnalyser(state.localStream);
+        showToast("Camera & Microphone connected in Lite Mode (240p/15fps)", "success");
+      } catch (err) {
+        console.warn("Real media devices unavailable, falling back to animated canvas stream:", err);
+        createFallbackLocalStream();
+        showToast("Using virtual local video stream", "info");
+      }
+    }
+
+    // Fallback Stream Generator (for preview environment compatibility)
+    function createFallbackLocalStream() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 320;
+      canvas.height = 240;
+      const ctx = canvas.getContext('2d');
+
+      let angle = 0;
+      function renderFrame() {
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Animated gradient orb representing camera input
+        angle += 0.04;
+        const x = canvas.width / 2 + Math.cos(angle) * 30;
+        const y = canvas.height / 2 + Math.sin(angle) * 20;
+
+        const grad = ctx.createRadialGradient(x, y, 10, x, y, 70);
+        grad.addColorStop(0, '#6366f1');
+        grad.addColorStop(1, '#1e1b4b');
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(x, y, 50, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText('Host Camera (Simulated)', 15, 25);
+
+        requestAnimationFrame(renderFrame);
+      }
+      renderFrame();
+
+      state.localStream = canvas.captureStream(15);
+      localVideo.srcObject = state.localStream;
+    }
+
+    // Audio Analyzer for Speaking Level Meter
+    function setupAudioAnalyser(stream) {
+      try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const audioSource = audioContext.createMediaStreamSource(stream);
+        state.audioAnalyser = audioContext.createAnalyser();
+        state.audioAnalyser.fftSize = 32;
+        audioSource.connect(state.audioAnalyser);
+
+        const dataArray = new Uint8Array(state.audioAnalyser.frequencyBinCount);
+        
+        function updateMeter() {
+          if (!state.isMicMuted) {
+            state.audioAnalyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+            const average = sum / dataArray.length;
+            const levelPct = Math.min(100, Math.round((average / 128) * 100));
+
+            localAudioBar.style.width = levelPct + '%';
+            if (levelPct > 15) {
+              localAudioIndicator.className = 'w-2 h-2 rounded-full bg-emerald-500 animate-pulse';
+            } else {
+              localAudioIndicator.className = 'w-2 h-2 rounded-full bg-slate-500';
+            }
+          } else {
+            localAudioBar.style.width = '0%';
+            localAudioIndicator.className = 'w-2 h-2 rounded-full bg-rose-500';
+          }
+          requestAnimationFrame(updateMeter);
+        }
+        updateMeter();
+      } catch (e) {
+        console.log("Audio visualizer running in fallback mode");
+      }
+    }
+
+    function toggleMicrophone() {
+      state.isMicMuted = !state.isMicMuted;
+      const btn = document.getElementById('btn-mic');
+      const icon = document.getElementById('icon-mic');
+
+      if (state.localStream) {
+        state.localStream.getAudioTracks().forEach(track => track.enabled = !state.isMicMuted);
+      }
+
+      if (state.isMicMuted) {
+        btn.classList.replace('bg-slate-800', 'bg-rose-600/90');
+        btn.classList.replace('hover:bg-slate-700', 'hover:bg-rose-500');
+        icon.className = 'fa-solid fa-microphone-slash text-base text-white';
+        showToast("Microphone muted", "info");
+      } else {
+        btn.classList.replace('bg-rose-600/90', 'bg-slate-800');
+        btn.classList.replace('hover:bg-rose-500', 'hover:bg-slate-700');
+        icon.className = 'fa-solid fa-microphone text-base text-slate-200';
+        showToast("Microphone unmuted", "success");
+      }
+    }
+
+    function toggleCamera() {
+      state.isVideoStopped = !state.isVideoStopped;
+      const btn = document.getElementById('btn-cam');
+      const icon = document.getElementById('icon-cam');
+
+      if (state.localStream) {
+        state.localStream.getVideoTracks().forEach(track => track.enabled = !state.isVideoStopped);
+      }
+
+      if (state.isVideoStopped) {
+        btn.classList.replace('bg-slate-800', 'bg-rose-600/90');
+        btn.classList.replace('hover:bg-slate-700', 'hover:bg-rose-500');
+        icon.className = 'fa-solid fa-video-slash text-base text-white';
+        localVideo.classList.add('hidden');
+        localAvatar.classList.remove('hidden');
+        localAvatar.classList.add('flex');
+        showToast("Camera turned off", "info");
+      } else {
+        btn.classList.replace('bg-rose-600/90', 'bg-slate-800');
+        btn.classList.replace('hover:bg-rose-500', 'hover:bg-slate-700');
+        icon.className = 'fa-solid fa-video text-base text-slate-200';
+        localVideo.classList.remove('hidden');
+        localAvatar.classList.add('hidden');
+        localAvatar.classList.remove('flex');
+        showToast("Camera turned on", "success");
+      }
+    }
+
+    async function toggleScreenShare() {
+      const btn = document.getElementById('btn-screenshare');
+      const icon = document.getElementById('icon-screenshare');
+
+      if (!state.isScreenSharing) {
+        try {
+          if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+            state.screenStream = await navigator.mediaDevices.getDisplayMedia({
+              video: { frameRate: { max: 10 } }
+            });
+          } else {
+            throw new Error("getDisplayMedia not allowed in current frame");
+          }
+
+          localVideo.srcObject = state.screenStream;
+          state.isScreenSharing = true;
+
+          // Listen for native stop share button on browser bar
+          state.screenStream.getVideoTracks()[0].onended = () => {
+            stopScreenShare();
+          };
+
+          btn.classList.add('bg-indigo-600', 'text-white');
+          showToast("Screen sharing started (optimized at 10 FPS)", "success");
+        } catch (e) {
+          // Fallback simulation mode if getDisplayMedia is restricted by iframe CSP
+          simulateScreenShare();
+        }
+      } else {
+        stopScreenShare();
+      }
+    }
+
+    function simulateScreenShare() {
+      state.isScreenSharing = true;
+      const btn = document.getElementById('btn-screenshare');
+      btn.classList.add('bg-indigo-600', 'text-white');
+
+      // Create simulated desktop stream
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 360;
+      const ctx = canvas.getContext('2d');
+
+      function drawScreen() {
+        if (!state.isScreenSharing) return;
+        ctx.fillStyle = '#090d16';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(20, 20, canvas.width - 40, canvas.height - 40);
+
+        ctx.fillStyle = '#6366f1';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.fillText('💻 Screen Share Stream (Lite Resolution)', 40, 50);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '12px monospace';
+        ctx.fillText(`Timestamp: ${new Date().toISOString()}`, 40, 80);
+        ctx.fillText(`Dynamic Bitrate: 115 kbps | Framerate: 10 FPS`, 40, 105);
+
+        ctx.fillStyle = '#1e293b';
+        ctx.fillRect(40, 130, 300, 150);
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillText('// WebRTC Screen Capture Active', 50, 160);
+
+        requestAnimationFrame(drawScreen);
+      }
+      drawScreen();
+
+      state.screenStream = canvas.captureStream(10);
+      localVideo.srcObject = state.screenStream;
+      showToast("Screen share active (Simulated Mode)", "success");
+    }
+
+    function stopScreenShare() {
+      state.isScreenSharing = false;
+      const btn = document.getElementById('btn-screenshare');
+      btn.classList.remove('bg-indigo-600', 'text-white');
+
+      if (state.screenStream) {
+        state.screenStream.getTracks().forEach(t => t.stop());
+      }
+      localVideo.srcObject = state.localStream;
+      showToast("Screen sharing stopped", "info");
+    }
+
+    function toggleLowBandwidthMode() {
+      state.isLowBandwidthMode = !state.isLowBandwidthMode;
+      const btn = document.getElementById('btn-low-bw');
+
+      if (state.isLowBandwidthMode) {
+        btn.classList.add('bg-amber-600', 'text-white');
+        state.packetsLostRate = 0.18;
+        state.bitrateKbps = 42;
+        showToast("Ultra-Lite Bandwidth Mode Activated (40kbps Cap)", "info");
+      } else {
+        btn.classList.remove('bg-amber-600', 'text-white');
+        state.packetsLostRate = 0.02;
+        state.bitrateKbps = 118;
+        showToast("Standard Lite Mode Restored", "success");
+      }
+      updateNetworkBadgeUI();
+    }
+
+    function startRemotePeerSimulation() {
+      const ctx = remoteCanvas1.getContext('2d');
+      remoteCanvas1.width = 320;
+      remoteCanvas1.height = 240;
+
+      let tick = 0;
+      function drawPeer() {
+        tick += 0.03;
+        ctx.fillStyle = '#020617';
+        ctx.fillRect(0, 0, remoteCanvas1.width, remoteCanvas1.height);
+
+        // Draw avatar head/shoulders simulation
+        const centerX = remoteCanvas1.width / 2;
+        const centerY = remoteCanvas1.height / 2 + 10;
+
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        ctx.arc(centerX, centerY + 50, 60, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#1e293b';
+        ctx.beginPath();
+        ctx.arc(centerX, centerY - 10, 30, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Subtle animation pulse
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY - 10, 32 + Math.sin(tick) * 2, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '11px sans-serif';
+        ctx.fillText('John Doe (Remote)', 15, 25);
+
+        // Dynamic audio bar level for remote peer
+        const audioVal = Math.max(0, Math.sin(tick * 2) * 80 + 20);
+        remote1AudioBar.style.width = audioVal + '%';
+
+        requestAnimationFrame(drawPeer);
+      }
+      drawPeer();
+    }
+
+    function startNetworkMonitoringLoop() {
+      setInterval(() => {
+        // Evaluate Network Quality
+        if (state.isSimulatingLoss || state.packetsLostRate > 0.12) {
+          // Packet loss high -> Trigger Low-Bandwidth Auto-Degradation
+          networkStatusBadge.className = "flex items-center space-x-2 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20 transition-all duration-300";
+          networkDot.className = "relative inline-flex rounded-full h-2 w-2 bg-rose-500";
+          document.getElementById('network-ping-pulse').className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75";
+          networkStatusText.innerText = "Network: High Packet Loss";
+          networkMetrics.innerText = `${state.bitrateKbps} kbps | ${(state.packetsLostRate * 100).toFixed(0)}% loss`;
+
+          // Switch Remote Stream to Audio-Only Mode to conserve bandwidth
+          remoteCanvas1.classList.add('hidden');
+          remoteAvatar1.classList.remove('hidden');
+          remoteAvatar1.classList.add('flex');
+        } else {
+          // Network restored
+          networkStatusBadge.className = "flex items-center space-x-2 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 transition-all duration-300";
+          networkDot.className = "relative inline-flex rounded-full h-2 w-2 bg-emerald-500";
+          document.getElementById('network-ping-pulse').className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75";
+          networkStatusText.innerText = "Network: Excellent";
+          networkMetrics.innerText = `${state.bitrateKbps} kbps | ${(state.packetsLostRate * 100).toFixed(0)}% loss`;
+
+          remoteCanvas1.classList.remove('hidden');
+          remoteAvatar1.classList.add('hidden');
+          remoteAvatar1.classList.remove('flex');
+        }
+      }, 2000);
+    }
+
+    function updateNetworkBadgeUI() {
+      networkMetrics.innerText = `${state.bitrateKbps} kbps | ${(state.packetsLostRate * 100).toFixed(0)}% loss`;
+    }
+
+    // Simulation Panel Functions
+    function toggleSimulatedNetworkDegradation() {
+      state.isSimulatingLoss = !state.isSimulatingLoss;
+      const btn = document.getElementById('btn-sim-network');
+
+      if (state.isSimulatingLoss) {
+        state.packetsLostRate = 0.22;
+        state.bitrateKbps = 38;
+        btn.classList.add('border-rose-500', 'text-rose-400');
+        showToast("Packet loss injected (22% loss simulated)", "error");
+      } else {
+        state.packetsLostRate = 0.02;
+        state.bitrateKbps = 118;
+        btn.classList.remove('border-rose-500', 'text-rose-400');
+        showToast("Packet loss simulator turned off", "success");
+      }
+    }
+
+    function triggerLowBandwidthAutoMute() {
+      state.packetsLostRate = 0.25;
+      showToast("Auto-Muting Video: Switched to Audio-Only Mode to preserve connection", "info");
+    }
+
+    function resetNetworkStats() {
+      state.isSimulatingLoss = false;
+      state.isLowBandwidthMode = false;
+      state.packetsLostRate = 0.02;
+      state.bitrateKbps = 118;
+      document.getElementById('btn-sim-network').classList.remove('border-rose-500', 'text-rose-400');
+      document.getElementById('btn-low-bw').classList.remove('bg-amber-600', 'text-white');
+      showToast("Network connection quality reset to optimal", "success");
+    }
+
+    function toggleRemoteParticipant() {
+      const grid = document.getElementById('video-grid');
+      state.hasPeer2 = !state.hasPeer2;
+
+      let card2 = document.getElementById('card-remote-2');
+
+      if (state.hasPeer2) {
+        if (!card2) {
+          card2 = document.createElement('div');
+          card2.id = 'card-remote-2';
+          card2.className = 'relative bg-slate-900/90 rounded-2xl overflow-hidden border border-slate-800 aspect-video shadow-xl flex items-center justify-center';
+          card2.innerHTML = `
+            <div class="flex flex-col items-center justify-center text-center p-4">
+              <div class="w-16 h-16 rounded-full bg-purple-600/30 border-2 border-purple-500 flex items-center justify-center text-purple-300 text-xl font-bold mb-2">
+                AS
+              </div>
+              <p class="text-xs text-slate-300 font-semibold">Alice Smith</p>
+              <p class="text-[10px] text-slate-400">Joined via Lite Web App</p>
+            </div>
+            <div class="absolute bottom-3 left-3 flex items-center space-x-2 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded-lg border border-slate-800 text-xs">
+              <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+              <span class="font-medium text-slate-200">Alice Smith</span>
+            </div>
+          `;
+          grid.appendChild(card2);
+        }
+        document.getElementById('participant-count').innerText = "3";
+        showToast("Alice Smith joined the meeting", "info");
+      } else {
+        if (card2) card2.remove();
+        document.getElementById('participant-count').innerText = "2";
+        showToast("Alice Smith left the meeting", "info");
+      }
+    }
+
+    function toggleChatDrawer() {
+      const drawer = document.getElementById('chat-drawer');
+      drawer.classList.toggle('translate-x-full');
+      state.unreadChatCount = 0;
+      document.getElementById('chat-badge').classList.add('hidden');
+    }
+
+    function handleSendChat(e) {
+      e.preventDefault();
+      const input = document.getElementById('chat-input');
+      const text = input.value.trim();
+      if (!text) return;
+
+      addChatMessage('You', text, true);
+      input.value = '';
+
+      // Simulated auto-reply from remote peer
+      setTimeout(() => {
+        addChatMessage('John Doe', 'Received clearly! Network usage is minimal.', false);
+      }, 1200);
+    }
+
+    function addChatMessage(sender, text, isSelf) {
+      const container = document.getElementById('chat-messages');
+      const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      const msgEl = document.createElement('div');
+      msgEl.className = 'flex flex-col space-y-1';
+      msgEl.innerHTML = `
+        <div class="flex items-center justify-between text-[10px] text-slate-400">
+          <span class="font-semibold ${isSelf ? 'text-indigo-400' : 'text-slate-300'}">${sender}</span>
+          <span>${time}</span>
+        </div>
+        <div class="p-2 rounded-lg ${isSelf ? 'bg-indigo-600/30 border border-indigo-500/30 text-indigo-100' : 'bg-slate-800/80 border border-slate-700/50 text-slate-200'}">
+          ${escapeHtml(text)}
+        </div>
+      `;
+
+      container.appendChild(msgEl);
+      container.scrollTop = container.scrollHeight;
+
+      // Update unread badge if drawer is closed
+      const drawer = document.getElementById('chat-drawer');
+      if (drawer.classList.contains('translate-x-full') && !isSelf) {
+        state.unreadChatCount++;
+        const badge = document.getElementById('chat-badge');
+        badge.innerText = state.unreadChatCount;
+        badge.classList.remove('hidden');
+        badge.classList.add('flex');
+      }
+    }
+
+    // Helper Utils
+    function copyRoomLink() {
+      const link = window.location.href;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(link);
+      } else {
+        const input = document.createElement('input');
+        input.value = link;
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        document.body.removeChild(input);
+      }
+      showToast("Meeting link copied to clipboard!", "success");
+    }
+
+    function leaveMeeting() {
+      if (confirm("Are you sure you want to leave this meeting?")) {
+        if (state.localStream) {
+          state.localStream.getTracks().forEach(t => t.stop());
+        }
+        document.body.innerHTML = `
+          <div class="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4">
+            <div class="w-16 h-16 bg-indigo-600/20 text-indigo-400 rounded-full flex items-center justify-center text-2xl mb-4 border border-indigo-500/30">
+              <i class="fa-solid fa-phone-slash"></i>
+            </div>
+            <h1 class="text-2xl font-bold mb-2">You left the meeting</h1>
+            <p class="text-slate-400 text-sm mb-6">Thank you for testing LiteMeet!</p>
+            <button onclick="window.location.reload()" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-sm font-medium transition">
+              Rejoin Meeting
+            </button>
+          </div>
+        `;
+      }
+    }
+
+    function showToast(message, type = "info") {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+
+      let iconClass = "fa-circle-info text-indigo-400";
+      let borderClass = "border-slate-700";
+
+      if (type === "success") {
+        iconClass = "fa-circle-check text-emerald-400";
+        borderClass = "border-emerald-500/30";
+      } else if (type === "error") {
+        iconClass = "fa-triangle-exclamation text-rose-400";
+        borderClass = "border-rose-500/30";
+      }
+
+      toast.className = `glass-panel px-3.5 py-2.5 rounded-xl border ${borderClass} text-xs text-slate-200 shadow-xl flex items-center space-x-2 animate-bounce-short transition-all duration-300 pointer-events-auto max-w-xs`;
+      toast.innerHTML = `
+        <i class="fa-solid ${iconClass}"></i>
+        <span class="flex-1">${escapeHtml(message)}</span>
+      `;
+
+      container.appendChild(toast);
+
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-10px)';
+        setTimeout(() => toast.remove(), 300);
+      }, 3500);
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/[&<>"']/g, function(m) {
+        return {
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#039;'
+        }[m];
+      });
+    }
+  </script>
+</body>
+</html>
